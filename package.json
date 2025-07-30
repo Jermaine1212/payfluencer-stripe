@@ -1,0 +1,26 @@
+{
+  "name": "payfluencer-stripe",
+  "version": "1.0.0",
+  "description": "Express server that creates Stripe Checkout sessions and handles webhooks",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Jermaine1212/payfluencer-stripe.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Jermaine1212/payfluencer-stripe/issues"
+  },
+  "homepage": "https://github.com/Jermaine1212/payfluencer-stripe#readme",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "dotenv": "^17.2.1",
+    "express": "^5.1.0",
+    "stripe": "^18.4.0"
+  }
+}
