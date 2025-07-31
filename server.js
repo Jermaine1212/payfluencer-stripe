@@ -88,6 +88,27 @@ app.post(
         { upsert: true }
       );
     }
+    // Handle partial or full refunds (or charge disputes that lead to a refund)
+    else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
+      const charge = event.data.object;   // charge or dispute object
+      // If this is a dispute, pull the underlying charge for amount/metadata consistency
+      const metadata = charge.metadata || (charge.charge && charge.charge.metadata) || {};
+      const userId = metadata.userId;
+      const amount = charge.amount || (charge.charge && charge.charge.amount) || 0; // pence
+
+      if (userId && amount > 0) {
+        await User.findByIdAndUpdate(
+          userId,
+          { $inc: { walletBalance: -amount } },
+          { upsert: true }
+        );
+        console.log(
+          `Refund processed for user ${userId}; amount: -£${(amount / 100).toFixed(2)}`
+        );
+      } else {
+        console.warn('Refund/dispute webhook missing userId or amount');
+      }
+    }
     res.sendStatus(200);
   }
 );
