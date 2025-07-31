@@ -86,6 +86,8 @@ app.get('/', (req, res) => {
  * Returns: { url: "https://checkout.stripe.com/..." }
  */
 app.post('/create-checkout-session', async (req, res) => {
+  // Dynamically pick the redirect origin from the incoming request (fall back to .env)
+  const origin = req.get('Origin') || process.env.DOMAIN;
   try {
     const { amountPounds, priceId, userId } = req.body;
     console.log('Body received:', req.body);
@@ -116,8 +118,8 @@ app.post('/create-checkout-session', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       line_items,
-      success_url: `${process.env.DOMAIN}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url:  `${process.env.DOMAIN}/cancel`,
+      success_url: `${origin}/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url:  `${origin}/cancel`,
       metadata: { userId }
     });
 
