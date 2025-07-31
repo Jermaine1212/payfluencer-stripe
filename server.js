@@ -25,9 +25,9 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
 
 const app = express();
 
-
+// Enable CORS for all routes
 app.use(cors());
-// Explicit preflight for create-checkout-session
+// Explicit preflight handler for the checkout session endpoint
 app.options('/create-checkout-session', cors());
 
 // Simple health check for Render
