@@ -28,6 +28,10 @@ const app = express();
 // Enable CORS for front-end origin (including all base44 preview URLs)
 app.use(cors({
   origin: (incomingOrigin, callback) => {
+    // Allow requests with no origin (e.g., cURL, server health checks)
+    if (!incomingOrigin) {
+      return callback(null, true);
+    }
     const allowedOrigins = [
       'https://payfluencer.app',
       /https:\/\/app--payfluencer-[^.]+\.base44\.app$/,
