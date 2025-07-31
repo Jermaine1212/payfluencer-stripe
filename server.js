@@ -3,6 +3,24 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
+const mongoose = require('mongoose');
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+  .then(() => console.log('📡 MongoDB connected'))
+  .catch(err => {
+    console.error('Mongo connection error:', err);
+    process.exit(1);
+  });
+
+// Define a User model for wallet balances (stored in pence)
+const userSchema = new mongoose.Schema({
+  _id: String,
+  walletBalance: { type: Number, default: 0 }
+});
+const User = mongoose.model('User', userSchema);
 
 console.log('Starting server.js...');
 console.log('>>> PAYFLUENCER STRIPE – dynamic-amount version loaded at', new Date().toISOString());
@@ -40,7 +58,7 @@ const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 app.post(
   '/webhook',
   express.raw({ type: 'application/json' }),
-  (req, res) => {
+  async (req, res) => {
     const sig = req.headers['stripe-signature'];
     let event;
     try {
@@ -61,7 +79,14 @@ app.post(
           session.amount_total / 100
         ).toFixed(2)}`
       );
-      // 🔥 TODO: update user balance in DB here
+      // Update user balance in the database
+      const userId = session.metadata.userId;
+      const amount = session.amount_total;  // in pence
+      await User.findByIdAndUpdate(
+        userId,
+        { $inc: { walletBalance: amount } },
+        { upsert: true }
+      );
     }
     res.sendStatus(200);
   }
@@ -133,6 +158,24 @@ app.post('/create-checkout-session', async (req, res) => {
       stack: err.stack
     });
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Endpoint to fetch a user's wallet balance (in pence)
+app.get('/wallet/balance', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) {
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+  try {
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    res.json({ balance: user.walletBalance });
+  } catch (err) {
+    console.error('Error fetching balance:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
