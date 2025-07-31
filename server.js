@@ -28,23 +28,24 @@ const app = express();
 // Enable CORS for front-end origin (including all base44 preview URLs)
 app.use(cors({
   origin: (incomingOrigin, callback) => {
-    // Allow requests with no origin (e.g., cURL, server health checks)
+    // Allow requests without an Origin header (server-to-server, health checks)
     if (!incomingOrigin) {
       return callback(null, true);
     }
-    const allowedOrigins = [
-      'https://payfluencer.app',
-      /https:\/\/app--payfluencer-[^.]+\.base44\.app$/,
-      'https://app.base44.com'
-    ];
-    const isAllowed = allowedOrigins.some(o =>
-      typeof o === 'string' ? o === incomingOrigin : o.test(incomingOrigin)
-    );
-    if (isAllowed) {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS not allowed for origin: ${incomingOrigin}`));
+    // Allow production domain
+    if (incomingOrigin === 'https://payfluencer.app') {
+      return callback(null, true);
     }
+    // Allow any Base44 preview or editor domain
+    if (
+      typeof incomingOrigin === 'string' &&
+      (incomingOrigin.endsWith('.base44.app') ||
+       incomingOrigin === 'https://app.base44.com')
+    ) {
+      return callback(null, true);
+    }
+    // Otherwise reject CORS
+    return callback(new Error(`CORS not allowed for origin: ${incomingOrigin}`));
   },
   methods: ['GET','POST','OPTIONS'],
   allowedHeaders: ['Content-Type']
