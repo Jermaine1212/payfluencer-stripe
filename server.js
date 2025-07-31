@@ -1,9 +1,13 @@
 // server.js
 require('dotenv').config();
 const express = require('express');
+const cors = require('cors');
 const Stripe = require('stripe');
 
 console.log('Starting server.js...');
+console.log('>>> PAYFLUENCER STRIPE – dynamic-amount version loaded at', new Date().toISOString());
+console.log('>>> Source file:', __filename);
+console.log('-------------------------------------------------------------');
 
 // Check required environment variables
 if (!process.env.STRIPE_SECRET_KEY) {
@@ -20,6 +24,12 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
 }
 
 const app = express();
+
+// Enable CORS for front-end origin
+app.use(cors({
+  origin: 'https://payfluencer.app',
+  methods: ['GET','POST','OPTIONS']
+}));
 
 // Simple health check for Render
 app.get('/healthz', (_req, res) => res.sendStatus(200));
@@ -73,44 +83,54 @@ app.get('/', (req, res) => {
 
 /**
  * 1️⃣  CREATE CHECKOUT SESSION
- * Expects JSON body: { "priceId": "...", "userId": "..." }
+ * Expects JSON body: { "amountPounds": "...", "userId": "..." }  // or legacy { "priceId": "...", "userId": "..." }
  * Returns: { url: "https://checkout.stripe.com/..." }
  */
 app.post('/create-checkout-session', async (req, res) => {
-  // req is defined here by Express
   try {
-    const { amountPounds, userId } = req.body;
+    const { amountPounds, priceId, userId } = req.body;
+    console.log('Body received:', req.body);
 
-    // Convert the UI‑supplied amount (in pounds) to pence
-    const amount = Math.round(parseFloat(amountPounds) * 100);
-
-    // Enforce a £20 minimum top‑up (2 000 pence)
-    if (!amount || amount < 2000) {
-      return res.status(400).json({
-        error: 'Minimum top‑up is £20'
-      });
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      line_items: [
+    // Allow either a dynamic amount *or* a fixed priceId for backward compatibility
+    let line_items;
+    if (priceId) {
+      // Fixed‑price flow (legacy)
+      line_items = [{ price: priceId, quantity: 1 }];
+    } else {
+      // Dynamic‑amount flow
+      const amount = Math.round(parseFloat(amountPounds) * 100); // pounds → pence
+      if (!amount || amount < 2000) {
+        return res.status(400).json({ error: 'Minimum top‑up is £20' });
+      }
+      line_items = [
         {
           price_data: {
             currency: 'gbp',
-            unit_amount: amount,           // amount is in pence
+            unit_amount: amount,
             product_data: { name: 'Wallet Top‑Up' }
           },
           quantity: 1
         }
-      ],
+      ];
+    }
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items,
       success_url: `${process.env.DOMAIN}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${process.env.DOMAIN}/cancel`,
-      metadata: { userId }        // optional: lets you identify the user later
+      metadata: { userId }
     });
 
     res.json({ url: session.url });
   } catch (err) {
-    console.error('Error creating checkout session:', err);
+    // log the low-level network details from stripe-node
+    console.error('Stripe network failure →', {
+      message: err.message,
+      code: err.code,
+      errno: err.errno,
+      stack: err.stack
+    });
     res.status(500).json({ error: err.message });
   }
 });
