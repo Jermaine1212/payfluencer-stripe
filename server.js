@@ -30,7 +30,8 @@ app.use(cors({
   origin: (incomingOrigin, callback) => {
     const allowedOrigins = [
       'https://payfluencer.app',
-      /https:\/\/app--payfluencer-[^.]+\.base44\.app$/
+      /https:\/\/app--payfluencer-[^.]+\.base44\.app$/,
+      'https://app.base44.com'
     ];
     const isAllowed = allowedOrigins.some(o =>
       typeof o === 'string' ? o === incomingOrigin : o.test(incomingOrigin)
