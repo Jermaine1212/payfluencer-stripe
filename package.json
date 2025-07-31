@@ -23,5 +23,8 @@
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "stripe": "^18.4.0"
+  },
+  "devDependencies": {
+    "node-fetch": "^2.7.0"
   }
 }
