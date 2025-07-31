@@ -28,7 +28,8 @@ const app = express();
 // Enable CORS for front-end origin
 app.use(cors({
   origin: 'https://payfluencer.app',
-  methods: ['GET','POST','OPTIONS']
+  methods: ['GET','POST','OPTIONS'],
+  allowedHeaders: ['Content-Type']
 }));
 
 // Simple health check for Render
