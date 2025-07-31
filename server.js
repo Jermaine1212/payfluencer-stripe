@@ -27,6 +27,7 @@ const txSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   type:   { type: String, enum: ['topup', 'refund'], required: true },
   amount: { type: Number, required: true }, // pence, positive for top‑up, negative for refund
+  status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
   stripeId: String,                         // session ID or charge ID
   createdAt: { type: Date, default: Date.now }
 });
@@ -233,6 +234,66 @@ app.get('/wallet/transactions', async (req, res) => {
     res.json({ transactions: txs });
   } catch (err) {
     console.error('Error fetching transactions:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * 3️⃣  WITHDRAWAL ENDPOINTS (manual PayPal payouts)
+ */
+
+// POST /wallet/withdraw-request
+// Body: { userId, amountPounds, paypalEmail }
+app.post('/wallet/withdraw-request', async (req, res) => {
+  try {
+    const { userId, amountPounds, paypalEmail } = req.body;
+    if (!userId || !amountPounds || !paypalEmail) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+    const amount = Math.round(parseFloat(amountPounds) * 100); // pence
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.walletBalance < amount) {
+      return res.status(400).json({ error: 'Insufficient balance' });
+    }
+
+    const tx = await Transaction.create({
+      userId,
+      type: 'withdraw',
+      amount: -amount,
+      stripeId: paypalEmail, // store email for reference
+      status: 'pending'
+    });
+
+    res.json({ status: 'pending', txId: tx._id });
+  } catch (err) {
+    console.error('Error creating withdraw request:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// PATCH /wallet/withdraw-complete
+// Body: { txId }  -- Should be called by admin AFTER sending PayPal payout
+app.patch('/wallet/withdraw-complete', async (req, res) => {
+  try {
+    const { txId } = req.body;
+    if (!txId) return res.status(400).json({ error: 'Missing txId' });
+
+    const tx = await Transaction.findById(txId);
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    if (tx.status !== 'pending') {
+      return res.status(400).json({ error: 'Withdrawal already completed' });
+    }
+
+    // Deduct funds now (tx.amount is negative)
+    await User.findByIdAndUpdate(tx.userId, { $inc: { walletBalance: tx.amount } });
+
+    tx.status = 'completed';
+    await tx.save();
+
+    res.json({ status: 'completed' });
+  } catch (err) {
+    console.error('Error completing withdrawal:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
