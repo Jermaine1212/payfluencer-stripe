@@ -93,7 +93,16 @@ app.post('/create-checkout-session', async (req, res) => {
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
-      line_items: [{ price: priceId, quantity: 1 }],
+      line_items: [
+        {
+          price_data: {
+            currency: 'gbp',
+            unit_amount: amount,           // amount is in pence
+            product_data: { name: 'Wallet Top‑Up' }
+          },
+          quantity: 1
+        }
+      ],
       success_url: `${process.env.DOMAIN}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url:  `${process.env.DOMAIN}/cancel`,
       metadata: { userId }        // optional: lets you identify the user later
