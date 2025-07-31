@@ -25,7 +25,10 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
 
 const app = express();
 
+
 app.use(cors());
+// Global CORS preflight handler
+app.options('*', cors());
 
 // Simple health check for Render
 app.get('/healthz', (_req, res) => res.sendStatus(200));
