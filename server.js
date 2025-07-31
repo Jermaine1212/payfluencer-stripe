@@ -25,9 +25,22 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
 
 const app = express();
 
-// Enable CORS for front-end origin
+// Enable CORS for front-end origin (including all base44 preview URLs)
 app.use(cors({
-  origin: ['https://payfluencer.app', 'https://app--payfluencer-c947d1a4.base44.app'],
+  origin: (incomingOrigin, callback) => {
+    const allowedOrigins = [
+      'https://payfluencer.app',
+      /https:\/\/app--payfluencer-[^.]+\.base44\.app$/
+    ];
+    const isAllowed = allowedOrigins.some(o =>
+      typeof o === 'string' ? o === incomingOrigin : o.test(incomingOrigin)
+    );
+    if (isAllowed) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS not allowed for origin: ${incomingOrigin}`));
+    }
+  },
   methods: ['GET','POST','OPTIONS'],
   allowedHeaders: ['Content-Type']
 }));
