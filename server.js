@@ -22,6 +22,16 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
+// Transaction schema to keep a history of wallet activity
+const txSchema = new mongoose.Schema({
+  userId: { type: String, required: true },
+  type:   { type: String, enum: ['topup', 'refund'], required: true },
+  amount: { type: Number, required: true }, // pence, positive for top‑up, negative for refund
+  stripeId: String,                         // session ID or charge ID
+  createdAt: { type: Date, default: Date.now }
+});
+const Transaction = mongoose.model('Transaction', txSchema);
+
 console.log('Starting server.js...');
 console.log('>>> PAYFLUENCER STRIPE – dynamic-amount version loaded at', new Date().toISOString());
 console.log('>>> Source file:', __filename);
@@ -87,6 +97,13 @@ app.post(
         { $inc: { walletBalance: amount } },
         { upsert: true }
       );
+      // Record transaction history
+      await Transaction.create({
+        userId,
+        type: 'topup',
+        amount,
+        stripeId: session.id
+      });
     }
     // Handle partial or full refunds (or charge disputes that lead to a refund)
     else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
@@ -102,6 +119,13 @@ app.post(
           { $inc: { walletBalance: -amount } },
           { upsert: true }
         );
+        // Record refund in transaction history
+        await Transaction.create({
+          userId,
+          type: 'refund',
+          amount: -amount,
+          stripeId: charge.id || (charge.charge && charge.charge.id)
+        });
         console.log(
           `Refund processed for user ${userId}; amount: -£${(amount / 100).toFixed(2)}`
         );
@@ -196,6 +220,19 @@ app.get('/wallet/balance', async (req, res) => {
     res.json({ balance: user.walletBalance });
   } catch (err) {
     console.error('Error fetching balance:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Endpoint to fetch a user's transaction history (most recent first)
+app.get('/wallet/transactions', async (req, res) => {
+  const userId = req.query.userId;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  try {
+    const txs = await Transaction.find({ userId }).sort({ createdAt: -1 }).limit(100);
+    res.json({ transactions: txs });
+  } catch (err) {
+    console.error('Error fetching transactions:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
