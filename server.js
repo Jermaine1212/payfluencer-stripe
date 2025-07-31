@@ -25,31 +25,7 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
 
 const app = express();
 
-// Enable CORS for front-end origin (including all base44 preview URLs)
-app.use(cors({
-  origin: (incomingOrigin, callback) => {
-    // Allow requests without an Origin header (server-to-server, health checks)
-    if (!incomingOrigin) {
-      return callback(null, true);
-    }
-    // Allow production domain
-    if (incomingOrigin === 'https://payfluencer.app') {
-      return callback(null, true);
-    }
-    // Allow any Base44 preview or editor domain
-    if (
-      typeof incomingOrigin === 'string' &&
-      (incomingOrigin.endsWith('.base44.app') ||
-       incomingOrigin === 'https://app.base44.com')
-    ) {
-      return callback(null, true);
-    }
-    // Otherwise reject CORS
-    return callback(new Error(`CORS not allowed for origin: ${incomingOrigin}`));
-  },
-  methods: ['GET','POST','OPTIONS'],
-  allowedHeaders: ['Content-Type']
-}));
+app.use(cors());
 
 // Simple health check for Render
 app.get('/healthz', (_req, res) => res.sendStatus(200));
