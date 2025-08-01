@@ -25,7 +25,7 @@ const User = mongoose.model('User', userSchema);
 // Transaction schema to keep a history of wallet activity
 const txSchema = new mongoose.Schema({
   userId: { type: String, required: true },
-  type:   { type: String, enum: ['topup', 'refund'], required: true },
+  type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'withdraw'], required: true },
   amount: { type: Number, required: true }, // pence, positive for top‑up, negative for refund
   status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
   stripeId: String,                         // session ID or charge ID
@@ -294,6 +294,42 @@ app.patch('/wallet/withdraw-complete', async (req, res) => {
     res.json({ status: 'completed' });
   } catch (err) {
     console.error('Error completing withdrawal:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// POST /wallet/deduct-campaign-budget
+// Body: { userId, campaignId, campaignName, amountPounds }
+app.post('/wallet/deduct-campaign-budget', async (req, res) => {
+  try {
+    const { userId, campaignId, campaignName, amountPounds } = req.body;
+    if (!userId || !campaignId || !amountPounds) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+
+    const amount = Math.round(parseFloat(amountPounds) * 100); // pounds → pence
+    const user   = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (user.walletBalance < amount) {
+      return res.status(400).json({ error: 'Insufficient balance' });
+    }
+
+    // Hold the funds
+    await User.findByIdAndUpdate(userId, { $inc: { walletBalance: -amount } });
+
+    // Record the hold in transaction history
+    await Transaction.create({
+      userId,
+      type: 'campaign_hold',
+      amount: -amount,
+      stripeId: campaignId,      // store campaignId for reconciliation
+      description: campaignName,
+      status: 'pending'
+    });
+
+    res.json({ status: 'held', balanceAfter: user.walletBalance - amount });
+  } catch (err) {
+    console.error('Deduct campaign budget error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
