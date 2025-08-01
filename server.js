@@ -334,6 +334,74 @@ app.post('/wallet/deduct-campaign-budget', async (req, res) => {
   }
 });
 
+/* ------------------------------------------------------------------ */
+/*  🔙  Refund a cancelled invite / campaign                           */
+/* ------------------------------------------------------------------ */
+// POST /wallet/refund-campaign-budget
+// Body: { userId, campaignId, amountPounds }
+app.post('/wallet/refund-campaign-budget', async (req, res) => {
+  try {
+    const { userId, campaignId, amountPounds } = req.body;
+    if (!userId || !campaignId || !amountPounds) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+    const amount = Math.round(parseFloat(amountPounds) * 100); // pounds → pence
+
+    // 1) credit the user’s wallet
+    await User.findByIdAndUpdate(userId, { $inc: { walletBalance: amount } });
+
+    // 2) mark the hold as cancelled & record refund
+    await Transaction.updateMany(
+      { userId, stripeId: campaignId, type: 'campaign_hold', status: 'pending' },
+      { status: 'cancelled' }
+    );
+    await Transaction.create({
+      userId,
+      type: 'refund',
+      amount,
+      stripeId: campaignId,
+      description: 'Campaign cancelled – funds returned',
+      status: 'completed'
+    });
+
+    console.log(`💸 REFUND  £${(amount / 100).toFixed(2)} → user ${userId}  (campaign ${campaignId})`);
+    res.json({ status: 'refunded', balanceDelta: amount });
+  } catch (err) {
+    console.error('Refund error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  ✅  Final‑pay when brand approves submission                       */
+/* ------------------------------------------------------------------ */
+// PATCH /wallet/campaign-payment-complete
+// Body: { userId, campaignId }
+app.patch('/wallet/campaign-payment-complete', async (req, res) => {
+  try {
+    const { userId, campaignId } = req.body;
+    if (!userId || !campaignId) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+
+    // flip pending hold → completed
+    const holdTx = await Transaction.findOneAndUpdate(
+      { userId, stripeId: campaignId, type: 'campaign_hold', status: 'pending' },
+      { status: 'completed', type: 'campaign_paid' },
+      { new: true }
+    );
+    if (!holdTx) {
+      return res.status(404).json({ error: 'Pending hold not found' });
+    }
+
+    console.log(`✅ PAYMENT COMPLETE  campaign ${campaignId} (£${(Math.abs(holdTx.amount) / 100).toFixed(2)})`);
+    res.json({ status: 'paid', txId: holdTx._id });
+  } catch (err) {
+    console.error('Payment‑complete error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Start server
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
