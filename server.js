@@ -25,7 +25,7 @@ const User = mongoose.model('User', userSchema);
 // Transaction schema to keep a history of wallet activity
 const txSchema = new mongoose.Schema({
   userId: { type: String, required: true },
-  type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'withdraw'], required: true },
+  type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'campaign_paid', 'campaign_payout', 'commission', 'withdraw'], required: true },
   amount: { type: Number, required: true }, // pence, positive for top‑up, negative for refund
   status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
   stripeId: String,                         // session ID or charge ID
@@ -376,15 +376,15 @@ app.post('/wallet/refund-campaign-budget', async (req, res) => {
 /*  ✅  Final‑pay when brand approves submission                       */
 /* ------------------------------------------------------------------ */
 // PATCH /wallet/campaign-payment-complete
-// Body: { userId, campaignId }
+// Body: { userId, influencerId, campaignId }
 app.patch('/wallet/campaign-payment-complete', async (req, res) => {
   try {
-    const { userId, campaignId } = req.body;
-    if (!userId || !campaignId) {
+    const { userId, influencerId, campaignId } = req.body;
+    if (!userId || !influencerId || !campaignId) {
       return res.status(400).json({ error: 'Missing params' });
     }
 
-    // flip pending hold → completed
+    // 1) flip pending hold → completed (keep record for brand)
     const holdTx = await Transaction.findOneAndUpdate(
       { userId, stripeId: campaignId, type: 'campaign_hold', status: 'pending' },
       { status: 'completed', type: 'campaign_paid' },
@@ -394,8 +394,36 @@ app.patch('/wallet/campaign-payment-complete', async (req, res) => {
       return res.status(404).json({ error: 'Pending hold not found' });
     }
 
-    console.log(`✅ PAYMENT COMPLETE  campaign ${campaignId} (£${(Math.abs(holdTx.amount) / 100).toFixed(2)})`);
-    res.json({ status: 'paid', txId: holdTx._id });
+    const gross       = Math.abs(holdTx.amount);            // pence
+    const commission  = Math.round(gross * 0.10);           // 10%
+    const netPayout   = gross - commission;                 // 90%
+
+    /* 2) credit influencer wallet with net amount */
+    await User.findByIdAndUpdate(influencerId, { $inc: { walletBalance: netPayout } }, { upsert: true });
+
+    /* 3) create two ledger rows: influencer payout & platform commission */
+    await Transaction.create([
+      {
+        userId: influencerId,
+        type: 'campaign_payout',
+        amount: netPayout,
+        stripeId: campaignId,
+        description: 'Net payout after 10% commission',
+        status: 'completed'
+      },
+      {
+        userId: 'PLATFORM',
+        type: 'commission',
+        amount: commission,
+        stripeId: campaignId,
+        description: `10% commission on campaign ${campaignId}`,
+        status: 'completed'
+      }
+    ]);
+
+    console.log(`✅ PAYMENT COMPLETE  campaign ${campaignId}  gross £${(gross/100).toFixed(2)}  net £${(netPayout/100).toFixed(2)}  commission £${(commission/100).toFixed(2)}`);
+
+    res.json({ status: 'paid', net: netPayout, commission });
   } catch (err) {
     console.error('Payment‑complete error:', err);
     res.status(500).json({ error: 'Internal server error' });
