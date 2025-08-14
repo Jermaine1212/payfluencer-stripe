@@ -210,18 +210,22 @@ app.post('/create-checkout-session', async (req, res) => {
 // Endpoint to fetch a user's wallet balance (in pence)
 app.get('/wallet/balance', async (req, res) => {
   const userId = req.query.userId;
-  if (!userId) {
-    return res.status(400).json({ error: 'Missing userId' });
-  }
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+
   try {
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    res.json({ balance: user.walletBalance });
+    console.log('GET /wallet/balance', { userId });
+
+    // Auto-create a wallet row if it doesn't exist yet so new accounts don't 404
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $setOnInsert: { walletBalance: 0 } },
+      { upsert: true, new: true }
+    );
+
+    return res.json({ balance: user.walletBalance || 0 });
   } catch (err) {
     console.error('Error fetching balance:', err);
-    res.status(500).json({ error: 'Internal server error' });
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
