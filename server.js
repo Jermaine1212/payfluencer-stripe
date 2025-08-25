@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
 const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
@@ -51,8 +52,72 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
   console.error('Missing STRIPE_WEBHOOK_SECRET in .env');
   process.exit(1);
 }
+if (!process.env.AUTH_JWT_SECRET) {
+  console.error('Missing AUTH_JWT_SECRET in .env');
+  process.exit(1);
+}
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || '';
 
 const app = express();
+
+// ===== Auth helpers =====
+function parseAuth(req) {
+  const header = req.headers['authorization'] || '';
+  const [, token] = header.split(' ');
+  if (!token) return null;
+  try {
+    const payload = jwt.verify(token, process.env.AUTH_JWT_SECRET); // HS256 by default
+    return { userId: payload.sub || payload.userId, role: payload.role || 'user', payload };
+  } catch (e) {
+    return null;
+  }
+}
+
+function requireAuth(req, res, next) {
+  const auth = parseAuth(req);
+  if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+  req.auth = auth;
+  next();
+}
+
+function requireUserMatch(paramPath) {
+  // paramPath like 'body.userId' or 'query.userId'
+  return (req, res, next) => {
+    const auth = req.auth || parseAuth(req);
+    if (!auth) return res.status(401).json({ error: 'Unauthorized' });
+    const parts = paramPath.split('.');
+    let cursor = req;
+    for (const p of parts) cursor = cursor?.[p];
+    const targetId = cursor;
+    if (!targetId || targetId !== auth.userId) {
+      return res.status(403).json({ error: 'Forbidden: user mismatch' });
+    }
+    next();
+  };
+}
+
+function isAdmin(req) {
+  const auth = req.auth || parseAuth(req);
+  const headerKey = req.headers['x-admin-api-key'];
+  if ((auth && auth.role === 'admin') || (ADMIN_API_KEY && headerKey && headerKey === ADMIN_API_KEY)) {
+    return true;
+  }
+  return false;
+}
+
+function requireAdmin(req, res, next) {
+  if (!isAdmin(req)) return res.status(403).json({ error: 'Admin only' });
+  next();
+}
+
+// Simple numeric validator for pound inputs
+function toPence(amountPounds) {
+  const n = Number(amountPounds);
+  if (!Number.isFinite(n)) return null;
+  const pennies = Math.round(n * 100);
+  if (pennies < 0) return null;
+  return pennies;
+}
 
 // Enable CORS for all routes
 app.use(cors());
@@ -156,7 +221,7 @@ app.get('/', (req, res) => {
  * Expects JSON body: { "amountPounds": "...", "userId": "..." }  // or legacy { "priceId": "...", "userId": "..." }
  * Returns: { url: "https://checkout.stripe.com/..." }
  */
-app.post('/create-checkout-session', async (req, res) => {
+app.post('/create-checkout-session', requireAuth, requireUserMatch('body.userId'), async (req, res) => {
   // Dynamically pick the redirect origin from the incoming request (fall back to .env)
   const origin = req.get('Origin') || process.env.DOMAIN;
   try {
@@ -170,7 +235,7 @@ app.post('/create-checkout-session', async (req, res) => {
       line_items = [{ price: priceId, quantity: 1 }];
     } else {
       // Dynamic‑amount flow
-      const amount = Math.round(parseFloat(amountPounds) * 100); // pounds → pence
+      const amount = toPence(amountPounds);
       if (!amount || amount < 2000) {
         return res.status(400).json({ error: 'Minimum top‑up is £20' });
       }
@@ -208,7 +273,7 @@ app.post('/create-checkout-session', async (req, res) => {
 });
 
 // Endpoint to fetch a user's wallet balance (in pence)
-app.get('/wallet/balance', async (req, res) => {
+app.get('/wallet/balance', requireAuth, requireUserMatch('query.userId'), async (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
@@ -230,7 +295,7 @@ app.get('/wallet/balance', async (req, res) => {
 });
 
 // Endpoint to fetch a user's transaction history (most recent first)
-app.get('/wallet/transactions', async (req, res) => {
+app.get('/wallet/transactions', requireAuth, requireUserMatch('query.userId'), async (req, res) => {
   const userId = req.query.userId;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
   try {
@@ -248,13 +313,14 @@ app.get('/wallet/transactions', async (req, res) => {
 
 // POST /wallet/withdraw-request
 // Body: { userId, amountPounds, paypalEmail }
-app.post('/wallet/withdraw-request', async (req, res) => {
+app.post('/wallet/withdraw-request', requireAuth, requireUserMatch('body.userId'), async (req, res) => {
   try {
     const { userId, amountPounds, paypalEmail } = req.body;
     if (!userId || !amountPounds || !paypalEmail) {
       return res.status(400).json({ error: 'Missing params' });
     }
-    const amount = Math.round(parseFloat(amountPounds) * 100); // pence
+    const amount = toPence(amountPounds);
+    if (!amount) return res.status(400).json({ error: 'Invalid amount' });
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.walletBalance < amount) {
@@ -278,7 +344,7 @@ app.post('/wallet/withdraw-request', async (req, res) => {
 
 // PATCH /wallet/withdraw-complete
 // Body: { txId }  -- Should be called by admin AFTER sending PayPal payout
-app.patch('/wallet/withdraw-complete', async (req, res) => {
+app.patch('/wallet/withdraw-complete', requireAdmin, async (req, res) => {
   try {
     const { txId } = req.body;
     if (!txId) return res.status(400).json({ error: 'Missing txId' });
@@ -304,14 +370,15 @@ app.patch('/wallet/withdraw-complete', async (req, res) => {
 
 // POST /wallet/deduct-campaign-budget
 // Body: { userId, campaignId, campaignName, amountPounds }
-app.post('/wallet/deduct-campaign-budget', async (req, res) => {
+app.post('/wallet/deduct-campaign-budget', requireAuth, requireUserMatch('body.userId'), async (req, res) => {
   try {
     const { userId, campaignId, campaignName, amountPounds } = req.body;
     if (!userId || !campaignId || !amountPounds) {
       return res.status(400).json({ error: 'Missing params' });
     }
 
-    const amount = Math.round(parseFloat(amountPounds) * 100); // pounds → pence
+    const amount = toPence(amountPounds);
+    if (!amount) return res.status(400).json({ error: 'Invalid amount' });
     const user   = await User.findById(userId);
     if (!user) return res.status(404).json({ error: 'User not found' });
     if (user.walletBalance < amount) {
@@ -343,13 +410,14 @@ app.post('/wallet/deduct-campaign-budget', async (req, res) => {
 /* ------------------------------------------------------------------ */
 // POST /wallet/refund-campaign-budget
 // Body: { userId, campaignId, amountPounds }
-app.post('/wallet/refund-campaign-budget', async (req, res) => {
+app.post('/wallet/refund-campaign-budget', requireAdmin, async (req, res) => {
   try {
     const { userId, campaignId, amountPounds } = req.body;
     if (!userId || !campaignId || !amountPounds) {
       return res.status(400).json({ error: 'Missing params' });
     }
-    const amount = Math.round(parseFloat(amountPounds) * 100); // pounds → pence
+    const amount = toPence(amountPounds);
+    if (!amount) return res.status(400).json({ error: 'Invalid amount' });
 
     // 1) credit the user’s wallet
     await User.findByIdAndUpdate(userId, { $inc: { walletBalance: amount } });
@@ -381,7 +449,7 @@ app.post('/wallet/refund-campaign-budget', async (req, res) => {
 /* ------------------------------------------------------------------ */
 // PATCH /wallet/campaign-payment-complete
 // Body: { userId, influencerId, campaignId }
-app.patch('/wallet/campaign-payment-complete', async (req, res) => {
+app.patch('/wallet/campaign-payment-complete', requireAdmin, async (req, res) => {
   try {
     const { userId, influencerId, campaignId } = req.body;
     if (!userId || !influencerId || !campaignId) {
@@ -432,6 +500,12 @@ app.patch('/wallet/campaign-payment-complete', async (req, res) => {
     console.error('Payment‑complete error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
+});
+
+// Generic error handler
+app.use((err, _req, res, _next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({ error: 'Internal server error' });
 });
 
 // Start server
