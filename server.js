@@ -28,8 +28,9 @@ const txSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'campaign_paid', 'campaign_payout', 'commission', 'withdraw'], required: true },
   amount: { type: Number, required: true }, // pence, positive for top‑up, negative for refund
-  status: { type: String, enum: ['pending', 'completed'], default: 'pending' },
+  status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
   stripeId: String,                         // session ID or charge ID
+  description: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
 const Transaction = mongoose.model('Transaction', txSchema);
