@@ -300,9 +300,20 @@ app.post('/create-checkout-session', async (req, res) => {
 
 // Reconcile a checkout session by ID, used by the Success page to ensure credit even if webhook was delayed
 app.get('/checkout/session-status', async (req, res) => {
-  const sessionId = req.query.session_id || req.query.sessionId;
-  if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
+  let sessionId = req.query.session_id || req.query.sessionId || null;
+  const paymentIntentId = req.query.payment_intent || req.query.paymentIntent || req.query.pi || null;
+
   try {
+    // If only a payment_intent was provided, find the related Checkout Session
+    if (!sessionId && paymentIntentId) {
+      const list = await stripe.checkout.sessions.list({ payment_intent: paymentIntentId, limit: 1 });
+      if (list && list.data && list.data.length) {
+        sessionId = list.data[0].id;
+      }
+    }
+
+    if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
+
     const session = await stripe.checkout.sessions.retrieve(sessionId);
     const paid = session?.payment_status === 'paid' || session?.status === 'complete';
     const userId = session?.metadata?.userId;
@@ -319,7 +330,7 @@ app.get('/checkout/session-status', async (req, res) => {
     }
 
     const user = userId ? await User.findById(userId) : null;
-    res.json({ paid, processed, balance: user?.walletBalance ?? null });
+    res.json({ paid, processed, balance: user?.walletBalance ?? null, sessionId });
   } catch (e) {
     console.error('session-status error', e);
     res.status(500).json({ error: 'session-status failed' });
@@ -358,6 +369,25 @@ app.get('/wallet/transactions', async (req, res) => {
   } catch (err) {
     console.error('Error fetching transactions:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Quick debug endpoint to inspect a user's wallet and recent transactions
+app.get('/wallet/debug', async (req, res) => {
+  const userId = req.query.userId || req.query.userid;
+  if (!userId) return res.status(400).json({ error: 'Missing userId' });
+  try {
+    const user = await User.findById(userId);
+    const txs = await Transaction.find({ userId }).sort({ createdAt: -1 }).limit(10);
+    res.json({
+      userId,
+      balance: user?.walletBalance ?? 0,
+      txCount: txs.length,
+      recent: txs
+    });
+  } catch (e) {
+    console.error('wallet/debug error', e);
+    res.status(500).json({ error: 'debug failed' });
   }
 });
 
