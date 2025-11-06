@@ -45,12 +45,14 @@ const User = mongoose.model('User', userSchema);
 const txSchema = new mongoose.Schema({
   userId: { type: String, required: true },
   type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'campaign_paid', 'campaign_payout', 'commission', 'withdraw'], required: true },
-  amount: { type: Number, required: true }, // pence, positive for top‑up, negative for refund
+  amount: { type: Number, required: true }, // pence, positive for top up, negative for refund
   status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
   stripeId: String,                         // session ID or charge ID
   description: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
+// Avoid duplicate credits if Stripe retries the same event
+txSchema.index({ stripeId: 1 }, { unique: true, partialFilterExpression: { stripeId: { $exists: true } } });
 const Transaction = mongoose.model('Transaction', txSchema);
 
 console.log('Starting server.js...');
@@ -165,53 +167,60 @@ app.post(
 
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object;
-      console.log(
-        `Top‑up successful for user ${session.metadata.userId}; amount: £${(
-          session.amount_total / 100
-        ).toFixed(2)}`
-      );
-      // Update user balance in the database
-      const userId = session.metadata.userId;
-      const amount = session.amount_total;  // in pence
-      await User.findByIdAndUpdate(
-        userId,
-        { $inc: { walletBalance: amount } },
-        { upsert: true }
-      );
-      // Record transaction history
-      await Transaction.create({
-        userId,
-        type: 'topup',
-        amount,
-        stripeId: session.id
-      });
+      const userId = session?.metadata?.userId;
+      const amount = session.amount_total; // pence
+      if (!userId || !amount) {
+        console.warn('checkout.session.completed missing userId or amount', { userId, amount });
+      } else {
+        const exists = await Transaction.findOne({ stripeId: session.id });
+        if (exists) {
+          console.log('Duplicate webhook received. Skipping credit for session', session.id);
+        } else {
+          console.log(`Top up successful for user ${userId}; amount: £${(amount / 100).toFixed(2)}`);
+          await User.findByIdAndUpdate(
+            userId,
+            { $inc: { walletBalance: amount } },
+            { upsert: true }
+          );
+          await Transaction.create({
+            userId,
+            type: 'topup',
+            amount,
+            stripeId: session.id,
+            status: 'completed'
+          });
+        }
+      }
     }
     // Handle partial or full refunds (or charge disputes that lead to a refund)
     else if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
       const charge = event.data.object;   // charge or dispute object
-      // If this is a dispute, pull the underlying charge for amount/metadata consistency
       const metadata = charge.metadata || (charge.charge && charge.charge.metadata) || {};
       const userId = metadata.userId;
       const amount = charge.amount || (charge.charge && charge.charge.amount) || 0; // pence
+      const stripeId = charge.id || (charge.charge && charge.charge.id);
 
-      if (userId && amount > 0) {
-        await User.findByIdAndUpdate(
-          userId,
-          { $inc: { walletBalance: -amount } },
-          { upsert: true }
-        );
-        // Record refund in transaction history
-        await Transaction.create({
-          userId,
-          type: 'refund',
-          amount: -amount,
-          stripeId: charge.id || (charge.charge && charge.charge.id)
-        });
-        console.log(
-          `Refund processed for user ${userId}; amount: -£${(amount / 100).toFixed(2)}`
-        );
+      if (userId && amount > 0 && stripeId) {
+        const exists = await Transaction.findOne({ stripeId });
+        if (exists) {
+          console.log('Duplicate refund/dispute webhook. Skipping for', stripeId);
+        } else {
+          await User.findByIdAndUpdate(
+            userId,
+            { $inc: { walletBalance: -amount } },
+            { upsert: true }
+          );
+          await Transaction.create({
+            userId,
+            type: 'refund',
+            amount: -amount,
+            stripeId,
+            status: 'completed'
+          });
+          console.log(`Refund processed for user ${userId}; amount: -£${(amount / 100).toFixed(2)}`);
+        }
       } else {
-        console.warn('Refund/dispute webhook missing userId or amount');
+        console.warn('Refund/dispute webhook missing userId, amount, or stripeId');
       }
     }
     res.sendStatus(200);
@@ -286,6 +295,34 @@ app.post('/create-checkout-session', async (req, res) => {
       stack: err.stack
     });
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Reconcile a checkout session by ID, used by the Success page to ensure credit even if webhook was delayed
+app.get('/checkout/session-status', async (req, res) => {
+  const sessionId = req.query.session_id || req.query.sessionId;
+  if (!sessionId) return res.status(400).json({ error: 'Missing session_id' });
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const paid = session?.payment_status === 'paid' || session?.status === 'complete';
+    const userId = session?.metadata?.userId;
+    const amount = session?.amount_total;
+
+    let processed = false;
+    if (paid && userId && amount) {
+      const exists = await Transaction.findOne({ stripeId: session.id });
+      if (!exists) {
+        await User.findByIdAndUpdate(userId, { $inc: { walletBalance: amount } }, { upsert: true });
+        await Transaction.create({ userId, type: 'topup', amount, stripeId: session.id, status: 'completed' });
+        processed = true;
+      }
+    }
+
+    const user = userId ? await User.findById(userId) : null;
+    res.json({ paid, processed, balance: user?.walletBalance ?? null });
+  } catch (e) {
+    console.error('session-status error', e);
+    res.status(500).json({ error: 'session-status failed' });
   }
 });
 
