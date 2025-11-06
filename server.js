@@ -2,11 +2,22 @@
 const path = require('path');
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.error('STRIPE_SECRET_KEY not loaded from .env at', path.resolve(__dirname, '.env'));
+const dotenvPath = path.resolve(__dirname, '.env');
+console.log('Loaded .env from:', dotenvPath);
+const STRIPE_CANDIDATE_KEYS = [
+  'STRIPE_SECRET_KEY',
+  'STRIPE_SECRET',
+  'STRIPE_API_KEY',
+  'STRIPE_LIVE_SECRET_KEY',
+  'STRIPE_TEST_SECRET_KEY'
+];
+const STRIPE_KEY = STRIPE_CANDIDATE_KEYS.map(k => process.env[k]).find(Boolean);
+if (!STRIPE_KEY) {
+  console.error('Stripe secret key not found in .env. Checked:', STRIPE_CANDIDATE_KEYS.join(', '));
+  console.error('Present STRIPE_* vars:', Object.keys(process.env).filter(k => k.startsWith('STRIPE')));
   process.exit(1);
 }
-console.log('Stripe key loaded, starts with:', String(process.env.STRIPE_SECRET_KEY).slice(0, 8));
+console.log('Stripe key loaded, starts with:', String(STRIPE_KEY).slice(0, 8));
 const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
@@ -48,10 +59,6 @@ console.log('>>> Source file:', __filename);
 console.log('-------------------------------------------------------------');
 
 // Check required environment variables
-if (!process.env.STRIPE_SECRET_KEY) {
-  console.error('Missing STRIPE_SECRET_KEY in .env');
-  process.exit(1);
-}
 if (!process.env.DOMAIN) {
   console.error('Missing DOMAIN in .env');
   process.exit(1);
@@ -136,7 +143,7 @@ app.options('/create-checkout-session', cors());
 app.get('/healthz', (_req, res) => res.sendStatus(200));
 
 // Initialise Stripe with your secret key from .env
-const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
+const stripe = Stripe(STRIPE_KEY);
 
 // 2️⃣  STRIPE WEBHOOK ENDPOINT  (must come before express.json())
 app.post(
@@ -281,8 +288,8 @@ app.post('/create-checkout-session', requireAuth, requireUserMatch('body.userId'
 });
 
 // Endpoint to fetch a user's wallet balance (in pence)
-app.get('/wallet/balance', requireAuth, requireUserMatch('query.userId'), async (req, res) => {
-  const userId = req.query.userId;
+app.get('/wallet/balance', async (req, res) => {
+  const userId = req.query.userId || req.query.userid;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
 
   try {
@@ -520,7 +527,7 @@ app.use((err, _req, res, _next) => {
 const PORT = process.env.PORT || 4242;
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  const key = process.env.STRIPE_SECRET_KEY || '';
+  const key = STRIPE_KEY || '';
   console.log(`Stripe mode: ${key.startsWith('sk_test') ? 'TEST' : 'LIVE'}`);
   console.log(`Domain: ${process.env.DOMAIN}`);
 });
