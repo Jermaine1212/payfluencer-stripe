@@ -1,5 +1,12 @@
 // server.js
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+
+if (!process.env.STRIPE_SECRET_KEY) {
+  console.error('STRIPE_SECRET_KEY not loaded from .env at', path.resolve(__dirname, '.env'));
+  process.exit(1);
+}
+console.log('Stripe key loaded, starts with:', String(process.env.STRIPE_SECRET_KEY).slice(0, 8));
 const express = require('express');
 const cors = require('cors');
 const Stripe = require('stripe');
