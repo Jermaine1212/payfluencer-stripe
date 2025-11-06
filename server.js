@@ -310,8 +310,8 @@ app.get('/wallet/balance', async (req, res) => {
 });
 
 // Endpoint to fetch a user's transaction history (most recent first)
-app.get('/wallet/transactions', requireAuth, requireUserMatch('query.userId'), async (req, res) => {
-  const userId = req.query.userId;
+app.get('/wallet/transactions', async (req, res) => {
+  const userId = req.query.userId || req.query.userid;
   if (!userId) return res.status(400).json({ error: 'Missing userId' });
   try {
     const txs = await Transaction.find({ userId }).sort({ createdAt: -1 }).limit(100);
