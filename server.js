@@ -236,11 +236,13 @@ app.get('/', (req, res) => {
  * Expects JSON body: { "amountPounds": "...", "userId": "..." }  // or legacy { "priceId": "...", "userId": "..." }
  * Returns: { url: "https://checkout.stripe.com/..." }
  */
-app.post('/create-checkout-session', requireAuth, requireUserMatch('body.userId'), async (req, res) => {
+app.post('/create-checkout-session', async (req, res) => {
   // Dynamically pick the redirect origin from the incoming request (fall back to .env)
   const origin = req.get('Origin') || process.env.DOMAIN;
   try {
-    const { amountPounds, priceId, userId } = req.body;
+    const { amountPounds, priceId } = req.body;
+    const userId = req.body.userId || req.body.userid || req.query.userId || req.query.userid;
+    if (!userId) { return res.status(400).json({ error: 'Missing userId' }); }
     console.log('Body received:', req.body);
 
     // Allow either a dynamic amount *or* a fixed priceId for backward compatibility
