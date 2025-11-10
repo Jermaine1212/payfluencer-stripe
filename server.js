@@ -156,8 +156,13 @@ const corsOptions = {
 };
 
 app.use(cors(corsOptions));
-// Handle preflight for all routes
-app.options('(.*)', cors(corsOptions));
+// Generic preflight responder for all routes (avoids path-to-regexp issues on Express 5)
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // Simple health check for Render
 app.get('/healthz', (_req, res) => res.sendStatus(200));
