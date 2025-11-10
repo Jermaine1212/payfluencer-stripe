@@ -77,17 +77,42 @@ const ADMIN_API_KEY = process.env.ADMIN_API_KEY || '';
 
 const app = express();
 
+
 // ===== Auth helpers =====
+function getCookie(req, name) {
+  const raw = req.headers?.cookie;
+  if (!raw) return null;
+  const parts = raw.split(';');
+  for (const part of parts) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(v.join('='));
+  }
+  return null;
+}
+
 function parseAuth(req) {
+  // 1) Try Authorization: Bearer <jwt>
   const header = req.headers['authorization'] || '';
   const [, token] = header.split(' ');
-  if (!token) return null;
-  try {
-    const payload = jwt.verify(token, process.env.AUTH_JWT_SECRET); // HS256 by default
-    return { userId: payload.sub || payload.userId, role: payload.role || 'user', payload };
-  } catch (e) {
-    return null;
+  if (token) {
+    try {
+      const payload = jwt.verify(token, process.env.AUTH_JWT_SECRET);
+      return { userId: payload.sub || payload.userId, role: payload.role || 'user', payload };
+    } catch (_) { /* fall through to cookies */ }
   }
+
+  // 2) Try common cookie names
+  const cookieNames = ['auth', 'token', 'jwt', 'idToken', 'session'];
+  for (const name of cookieNames) {
+    const c = getCookie(req, name);
+    if (!c) continue;
+    try {
+      const payload = jwt.verify(c, process.env.AUTH_JWT_SECRET);
+      return { userId: payload.sub || payload.userId, role: payload.role || 'user', payload };
+    } catch (_) { /* try next */ }
+  }
+
+  return null;
 }
 
 function requireAuth(req, res, next) {
