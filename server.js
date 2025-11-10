@@ -157,7 +157,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 // Handle preflight for all routes
-app.options('*', cors(corsOptions));
+app.options('(.*)', cors(corsOptions));
 
 // Simple health check for Render
 app.get('/healthz', (_req, res) => res.sendStatus(200));
