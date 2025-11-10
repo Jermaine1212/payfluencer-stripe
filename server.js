@@ -189,28 +189,26 @@ function toPence(amountPounds) {
   return pennies;
 }
 
-// Enable CORS for browser calls with credentials from allowed origins
+// Explicit CORS middleware: only allow whitelisted origins, reflect origin, enable credentials, handle preflights
 const ALLOWED_ORIGINS = [
   process.env.DOMAIN,
   'https://payfluencer.app',
-  'https://www.payfluencer.app'
+  'https://www.payfluencer.app',
+  'http://localhost:3000',
+  'http://localhost:5173'
 ].filter(Boolean);
 
-const corsOptions = {
-  origin: function (origin, callback) {
-    // allow non-browser or same-origin requests with no Origin header
-    if (!origin) return callback(null, true);
-    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
-    return callback(null, false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key', 'x-auth-token', 'x-access-token']
-};
-
-app.use(cors(corsOptions));
-// Generic preflight responder for all routes (avoids path-to-regexp issues on Express 5)
+// Explicit CORS headers (no wildcard) to support credentials
 app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-api-key, x-auth-token, x-access-token');
+  }
+
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
