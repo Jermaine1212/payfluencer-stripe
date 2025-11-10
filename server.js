@@ -136,10 +136,28 @@ function toPence(amountPounds) {
   return pennies;
 }
 
-// Enable CORS for all routes
-app.use(cors());
-// Explicit preflight handler for the checkout session endpoint
-app.options('/create-checkout-session', cors());
+// Enable CORS for browser calls with credentials from allowed origins
+const ALLOWED_ORIGINS = [
+  process.env.DOMAIN,
+  'https://payfluencer.app',
+  'https://www.payfluencer.app'
+].filter(Boolean);
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // allow non-browser or same-origin requests with no Origin header
+    if (!origin) return callback(null, true);
+    if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+    return callback(null, false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key']
+};
+
+app.use(cors(corsOptions));
+// Handle preflight for all routes
+app.options('*', cors(corsOptions));
 
 // Simple health check for Render
 app.get('/healthz', (_req, res) => res.sendStatus(200));
