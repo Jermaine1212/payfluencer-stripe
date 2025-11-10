@@ -180,6 +180,17 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+// Allow either admin override OR user JWT with matching userId
+function allowAdminOrUser(paramPath) {
+  return (req, res, next) => {
+    if (isAdmin(req)) {
+      console.log('[auth] admin override accepted');
+      return next();
+    }
+    return requireAuth(req, res, () => requireUserMatch(paramPath)(req, res, next));
+  };
+}
+
 // Simple numeric validator for pound inputs
 function toPence(amountPounds) {
   const n = Number(amountPounds);
@@ -528,7 +539,7 @@ app.patch('/wallet/withdraw-complete', requireAdmin, async (req, res) => {
 
 // POST /wallet/deduct-campaign-budget
 // Body: { userId, campaignId, campaignName, amountPounds }
-app.post('/wallet/deduct-campaign-budget', requireAuth, requireUserMatch('body.userId'), async (req, res) => {
+app.post('/wallet/deduct-campaign-budget', allowAdminOrUser('body.userId'), async (req, res) => {
   try {
     const { userId, campaignId, campaignName, amountPounds } = req.body;
     if (!userId || !campaignId || !amountPounds) {
