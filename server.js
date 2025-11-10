@@ -79,30 +79,49 @@ const app = express();
 
 
 // ===== Auth helpers =====
-function getCookie(req, name) {
-  const raw = req.headers?.cookie;
-  if (!raw) return null;
-  const parts = raw.split(';');
-  for (const part of parts) {
+function parseCookies(raw) {
+  if (!raw) return {};
+  const map = {};
+  raw.split(';').forEach((part) => {
     const [k, ...v] = part.trim().split('=');
-    if (k === name) return decodeURIComponent(v.join('='));
-  }
-  return null;
+    if (!k) return;
+    map[k] = decodeURIComponent(v.join('='));
+  });
+  return map;
+}
+
+function getCookie(req, name) {
+  const map = parseCookies(req.headers?.cookie || '');
+  return map[name] || null;
 }
 
 function parseAuth(req) {
-  // 1) Try Authorization: Bearer <jwt>
+  // 1) Try headers first (Bearer and common custom headers)
   const header = req.headers['authorization'] || '';
-  const [, token] = header.split(' ');
-  if (token) {
+  const parts = header.split(' ');
+  const bearer = parts.length === 2 ? parts[1] : null;
+  const headerTokens = [
+    bearer,
+    req.headers['x-auth-token'],
+    req.headers['x-access-token']
+  ].filter(Boolean);
+
+  for (const t of headerTokens) {
     try {
-      const payload = jwt.verify(token, process.env.AUTH_JWT_SECRET);
+      const payload = jwt.verify(t, process.env.AUTH_JWT_SECRET);
       return { userId: payload.sub || payload.userId, role: payload.role || 'user', payload };
-    } catch (_) { /* fall through to cookies */ }
+    } catch (_) { /* try next */ }
   }
 
-  // 2) Try common cookie names
-  const cookieNames = ['auth', 'token', 'jwt', 'idToken', 'session'];
+  // 2) Try common cookie names across providers
+  const cookieNames = [
+    // Generic
+    'auth','token','jwt','idToken','session','sessionid','__session',
+    // NextAuth
+    'next-auth.session-token','__Secure-next-auth.session-token','__Host-next-auth.session-token',
+    // Supabase
+    'sb-access-token','sb-refresh-token','supabase-auth-token'
+  ];
   for (const name of cookieNames) {
     const c = getCookie(req, name);
     if (!c) continue;
@@ -115,8 +134,17 @@ function parseAuth(req) {
   return null;
 }
 
+function logAuthProbe(req, found) {
+  try {
+    const hasAuthz = Boolean(req.headers['authorization']);
+    const hasCookie = Boolean(req.headers?.cookie);
+    console.log('[auth] probe', { hasAuthz, hasCookie, found: Boolean(found) });
+  } catch (_) {}
+}
+
 function requireAuth(req, res, next) {
   const auth = parseAuth(req);
+  logAuthProbe(req, auth);
   if (!auth) return res.status(401).json({ error: 'Unauthorized' });
   req.auth = auth;
   next();
@@ -177,7 +205,7 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key']
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-api-key', 'x-auth-token', 'x-access-token']
 };
 
 app.use(cors(corsOptions));
