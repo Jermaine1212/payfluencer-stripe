@@ -676,7 +676,7 @@ app.patch('/wallet/campaign-payment-complete', requireAdmin, async (req, res) =>
 /* ------------------------------------------------------------------ */
 // POST /wallet/withdraw-available-budget
 // Body: { userId, amountPounds, campaignId, reason }
-app.post('/wallet/withdraw-available-budget', allowAdminOrUser('body.userId'), async (req, res) => {
+app.post('/wallet/withdraw-available-budget', requireAdmin, async (req, res) => {
   try {
     const { userId, amountPounds, campaignId, reason } = req.body;
     if (!userId || !amountPounds) {
