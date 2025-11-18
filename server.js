@@ -671,6 +671,54 @@ app.patch('/wallet/campaign-payment-complete', requireAdmin, async (req, res) =>
   }
 });
 
+/* ------------------------------------------------------------------ */
+/*  💰  Withdraw "available budget" back into wallet (no hold link)    */
+/* ------------------------------------------------------------------ */
+// POST /wallet/withdraw-available-budget
+// Body: { userId, amountPounds, campaignId, reason }
+app.post('/wallet/withdraw-available-budget', allowAdminOrUser('body.userId'), async (req, res) => {
+  try {
+    const { userId, amountPounds, campaignId, reason } = req.body;
+    if (!userId || !amountPounds) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+
+    const amount = toPence(amountPounds);
+    if (!amount) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    // Credit the user’s wallet
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { walletBalance: amount } },
+      { upsert: true, new: true }
+    );
+
+    // Record as a refund / budget withdrawal for audit
+    await Transaction.create({
+      userId,
+      type: 'refund',
+      amount,
+      stripeId: campaignId || undefined,
+      description: reason || 'Campaign available budget withdrawn to wallet',
+      status: 'completed'
+    });
+
+    console.log(
+      `💰 AVAILABLE WITHDRAW  £${(amount / 100).toFixed(2)} → user ${userId}  (campaign ${campaignId || 'n/a'})`
+    );
+
+    res.json({
+      status: 'withdrawn',
+      balanceAfter: user.walletBalance
+    });
+  } catch (err) {
+    console.error('Withdraw available budget error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Generic error handler
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
