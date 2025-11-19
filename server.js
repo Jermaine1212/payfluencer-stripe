@@ -575,6 +575,62 @@ app.post('/wallet/deduct-campaign-budget', allowAdminOrUser('body.userId'), asyn
 });
 
 /* ------------------------------------------------------------------ */
+/*  💳  Deduct extra wallet funds for campaign (additional budget)    */
+/* ------------------------------------------------------------------ */
+// POST /wallet/deduct-campaign-additional
+// Body: { userId, campaignId, amountPounds, description }
+app.post('/wallet/deduct-campaign-additional', requireAdmin, async (req, res) => {
+  try {
+    const { userId, campaignId, amountPounds, description } = req.body;
+    if (!userId || !amountPounds) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+
+    const amount = toPence(amountPounds);
+    if (!amount) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    if (user.walletBalance < amount) {
+      return res.status(400).json({ error: 'Insufficient wallet balance' });
+    }
+
+    // Deduct from wallet
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { walletBalance: -amount } },
+      { new: true }
+    );
+
+    // Record as an additional campaign hold so it flows through normal payment logic
+    await Transaction.create({
+      userId,
+      type: 'campaign_hold',
+      amount: -amount,
+      stripeId: campaignId || undefined,
+      description: description || 'Additional campaign budget',
+      status: 'pending'
+    });
+
+    console.log(
+      `💳 ADDITIONAL DEDUCT  £${(amount / 100).toFixed(2)} from user ${userId} for campaign ${campaignId || 'n/a'}`
+    );
+
+    return res.json({
+      status: 'deducted',
+      balanceAfter: updatedUser.walletBalance
+    });
+  } catch (err) {
+    console.error('deduct-campaign-additional error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/* ------------------------------------------------------------------ */
 /*  🔙  Refund a cancelled invite / campaign                           */
 /* ------------------------------------------------------------------ */
 // POST /wallet/refund-campaign-budget
