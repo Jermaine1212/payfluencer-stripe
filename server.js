@@ -727,6 +727,64 @@ app.patch('/wallet/campaign-payment-complete', requireAdmin, async (req, res) =>
   }
 });
 
+/**
+ * Legacy endpoint for older frontend:
+ * POST /wallet/process-campaign-payment
+ * Body: { userId, influencerId, campaignId }
+ * Simply forwards to /wallet/campaign-payment-complete
+ */
+app.post('/wallet/process-campaign-payment', requireAdmin, async (req, res) => {
+  try {
+    const { userId, influencerId, campaignId } = req.body;
+    if (!userId || !influencerId || !campaignId) {
+      return res.status(400).json({ error: 'Missing params' });
+    }
+
+    // Reuse existing logic
+    const holdTx = await Transaction.findOneAndUpdate(
+      { userId, stripeId: campaignId, type: 'campaign_hold', status: 'pending' },
+      { status: 'completed', type: 'campaign_paid' },
+      { new: true }
+    );
+
+    if (!holdTx) {
+      return res.status(404).json({ error: 'Pending hold not found' });
+    }
+
+    const gross = Math.abs(holdTx.amount);
+    const commission = Math.round(gross * 0.10);
+    const netPayout = gross - commission;
+
+    await User.findByIdAndUpdate(influencerId, { $inc: { walletBalance: netPayout } }, { upsert: true });
+
+    await Transaction.create([
+      {
+        userId: influencerId,
+        type: 'campaign_payout',
+        amount: netPayout,
+        stripeId: campaignId,
+        description: 'Net payout after 10% commission',
+        status: 'completed'
+      },
+      {
+        userId: 'PLATFORM',
+        type: 'commission',
+        amount: commission,
+        stripeId: campaignId,
+        description: `10% commission on campaign ${campaignId}`,
+        status: 'completed'
+      }
+    ]);
+
+    console.log(`📌 LEGACY PAYMENT COMPLETE for campaign ${campaignId}`);
+
+    return res.json({ status: 'paid', net: netPayout, commission });
+  } catch (err) {
+    console.error('Legacy process‑campaign‑payment error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*  💰  Withdraw "available budget" back into wallet (no hold link)    */
 /* ------------------------------------------------------------------ */
