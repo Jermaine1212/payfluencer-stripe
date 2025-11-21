@@ -833,6 +833,41 @@ app.post('/wallet/withdraw-available-budget', requireAdmin, async (req, res) => 
   }
 });
 
+/* ------------------------------------------------------------------ */
+/*  📊  Total "available budget" withdrawn for a campaign (Mongo)      */
+/* ------------------------------------------------------------------ */
+// GET /wallet/campaign-withdrawn
+// Query: ?campaignId=...
+app.get('/wallet/campaign-withdrawn', requireAdmin, async (req, res) => {
+  try {
+    const campaignId = String(req.query.campaignId || req.query.campaign_id || '').trim();
+    if (!campaignId) {
+      return res.status(400).json({ error: 'Missing campaignId' });
+    }
+
+    // Sum all refund transactions created by /wallet/withdraw-available-budget
+    // We key them by campaignId in stripeId and look for descriptions mentioning "withdrawn to wallet"
+    const txs = await Transaction.find({
+      stripeId: campaignId,
+      type: 'refund',
+      description: /withdrawn to wallet/i
+    });
+
+    const totalPence = txs.reduce((sum, tx) => sum + (tx.amount || 0), 0);
+
+    // Return both pence and pounds for flexibility
+    const withdrawnPounds = Math.round((totalPence / 100) * 100) / 100;
+
+    return res.json({
+      withdrawnPence: totalPence,
+      withdrawnPounds
+    });
+  } catch (err) {
+    console.error('campaign-withdrawn error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Generic error handler
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
