@@ -860,12 +860,7 @@ app.get('/wallet/campaign-withdrawn', requireAdmin, async (req, res) => {
       return sum + amt;
     }, 0);
 
-    // 2) Total withdrawals of campaign budget back to the brand wallet
-    // Includes both:
-    //   - /wallet/withdraw-available-budget      (description "Campaign available budget withdrawn to wallet", type: 'refund')
-    //   - /wallet/refund-campaign-budget         (description "Campaign cancelled – funds returned", type: 'refund')
-    // We key on stripeId = campaignId and status = 'completed' so all completed
-    // campaign-related refunds are counted, regardless of description.
+    // 2) Total withdrawals back to the brand wallet (completed refunds only)
     const withdrawalTxs = await Transaction.find({
       stripeId: campaignId,
       type: 'refund',
@@ -874,23 +869,37 @@ app.get('/wallet/campaign-withdrawn', requireAdmin, async (req, res) => {
 
     const totalWithdrawnPence = withdrawalTxs.reduce((sum, tx) => {
       const raw = typeof tx.amount === 'number' ? tx.amount : 0;
-      // Refund amounts can be stored positive (admin-initiated) or negative (Stripe refund webhook).
-      // Use absolute value so we count the magnitude of completed refunds consistently.
-      const amt = Math.abs(raw);
-      return sum + amt;
+      // Refund amounts may be stored positive (admin-initiated) or negative (Stripe webhook). Count magnitude.
+      return sum + Math.abs(raw);
     }, 0);
 
-    // 3) Net campaign pot = total pay-ins minus withdrawals (never negative)
-    const potPence = Math.max(0, totalPayInPence - totalWithdrawnPence);
+    // 3) Gross spend from the campaign pot (completed holds → paid)
+    const paidTxs = await Transaction.find({
+      stripeId: campaignId,
+      type: 'campaign_paid',
+      status: 'completed'
+    });
 
-    const withdrawnPounds = Math.round((totalWithdrawnPence / 100) * 100) / 100;
-    const potPounds = Math.round((potPence / 100) * 100) / 100;
+    const totalPaidGrossPence = paidTxs.reduce((sum, tx) => {
+      const raw = typeof tx.amount === 'number' ? tx.amount : 0;
+      // Holds are stored as negative pence; use absolute values for gross spend
+      return sum + Math.abs(raw);
+    }, 0);
+
+    // 4) Remaining campaign pot = pay-ins − paid − withdrawals (never negative)
+    const potPence = Math.max(0, totalPayInPence - totalPaidGrossPence - totalWithdrawnPence);
+
+    const toPounds = (p) => Math.round((p / 100) * 100) / 100;
 
     return res.json({
+      payInPence: totalPayInPence,
+      payInPounds: toPounds(totalPayInPence),
+      paidGrossPence: totalPaidGrossPence,
+      paidGrossPounds: toPounds(totalPaidGrossPence),
       withdrawnPence: totalWithdrawnPence,
-      withdrawnPounds,
+      withdrawnPounds: toPounds(totalWithdrawnPence),
       potPence,
-      potPounds
+      potPounds: toPounds(potPence)
     });
   } catch (err) {
     console.error('campaign-withdrawn error:', err);
