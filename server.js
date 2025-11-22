@@ -845,22 +845,46 @@ app.get('/wallet/campaign-withdrawn', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: 'Missing campaignId' });
     }
 
-    // Sum all refund transactions created by /wallet/withdraw-available-budget
-    // We key them by campaignId in stripeId and look for descriptions mentioning "withdrawn to wallet"
-    const txs = await Transaction.find({
+    // 1) Total pay-ins to this campaign (initial hold + additional top-ups)
+    // We treat both pending holds and completed campaign payments as money that
+    // moved from the brand wallet into the campaign pot.
+    const payInTxs = await Transaction.find({
+      stripeId: campaignId,
+      type: { $in: ['campaign_hold', 'campaign_paid'] },
+      status: { $ne: 'cancelled' }
+    });
+
+    const totalPayInPence = payInTxs.reduce((sum, tx) => {
+      // these amounts are stored as negative pence, so flip the sign
+      const amt = typeof tx.amount === 'number' ? Math.abs(tx.amount) : 0;
+      return sum + amt;
+    }, 0);
+
+    // 2) Total withdrawals of available campaign budget back to the brand wallet
+    // These are created by /wallet/withdraw-available-budget and use a description
+    // that includes "withdrawn to wallet".
+    const withdrawalTxs = await Transaction.find({
       stripeId: campaignId,
       type: 'refund',
       description: /withdrawn to wallet/i
     });
 
-    const totalPence = txs.reduce((sum, tx) => sum + (tx.amount || 0), 0);
+    const totalWithdrawnPence = withdrawalTxs.reduce((sum, tx) => {
+      const amt = typeof tx.amount === 'number' ? tx.amount : 0;
+      return sum + amt;
+    }, 0);
 
-    // Return both pence and pounds for flexibility
-    const withdrawnPounds = Math.round((totalPence / 100) * 100) / 100;
+    // 3) Net campaign pot = total pay-ins minus withdrawals (never negative)
+    const potPence = Math.max(0, totalPayInPence - totalWithdrawnPence);
+
+    const withdrawnPounds = Math.round((totalWithdrawnPence / 100) * 100) / 100;
+    const potPounds = Math.round((potPence / 100) * 100) / 100;
 
     return res.json({
-      withdrawnPence: totalPence,
-      withdrawnPounds
+      withdrawnPence: totalWithdrawnPence,
+      withdrawnPounds,
+      potPence,
+      potPounds
     });
   } catch (err) {
     console.error('campaign-withdrawn error:', err);
