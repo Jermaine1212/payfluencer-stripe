@@ -44,10 +44,11 @@ const User = mongoose.model('User', userSchema);
 // Transaction schema to keep a history of wallet activity
 const txSchema = new mongoose.Schema({
   userId: { type: String, required: true },
-  type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'campaign_paid', 'campaign_payout', 'commission', 'withdraw'], required: true },
-  amount: { type: Number, required: true }, // pence, positive for top up, negative for refund
+  type:   { type: String, enum: ['topup', 'refund', 'campaign_hold', 'campaign_paid', 'campaign_payout', 'commission', 'withdraw', 'admin_adjust'], required: true },
+  amount: { type: Number, required: true }, // pence, positive for top up, negative for refund or deductions
   status: { type: String, enum: ['pending', 'completed', 'cancelled'], default: 'pending' },
   stripeId: String,                         // session ID or charge ID
+  adminId: String,                          // optional admin identifier for manual adjustments
   description: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
@@ -198,6 +199,14 @@ function toPence(amountPounds) {
   const pennies = Math.round(n * 100);
   if (pennies < 0) return null;
   return pennies;
+}
+
+// Allows positive or negative amounts for admin adjustments
+function toPenceSigned(amountPounds) {
+  const n = Number(amountPounds);
+  if (!Number.isFinite(n)) return null;
+  const pennies = Math.round(n * 100);
+  return pennies === 0 ? 0 : pennies; // can be negative
 }
 
 // Explicit CORS middleware: only allow whitelisted origins, reflect origin, enable credentials, handle preflights
@@ -830,6 +839,61 @@ app.post('/wallet/withdraw-available-budget', requireAdmin, async (req, res) => 
   } catch (err) {
     console.error('Withdraw available budget error:', err);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  🛠️  Admin manual wallet adjustment                                 */
+/* ------------------------------------------------------------------ */
+// POST /wallet/admin-adjust
+// Body: { userId, amountPounds, reason, adminId }
+app.post('/wallet/admin-adjust', requireAdmin, async (req, res) => {
+  try {
+    const { userId, amountPounds, reason, adminId } = req.body;
+    if (!userId || typeof amountPounds === 'undefined') {
+      return res.status(400).json({ error: 'Missing userId or amountPounds' });
+    }
+
+    const delta = toPenceSigned(amountPounds);
+    if (delta === null || delta === 0) {
+      return res.status(400).json({ error: 'Invalid amountPounds' });
+    }
+
+    // Ensure a wallet row exists for this user
+    let user = await User.findById(userId);
+    if (!user) {
+      user = await User.create({ _id: userId, walletBalance: 0 });
+    }
+
+    // Prevent negative balances on deductions
+    if (user.walletBalance + delta < 0) {
+      return res.status(400).json({ error: 'Insufficient balance for deduction' });
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(
+      userId,
+      { $inc: { walletBalance: delta } },
+      { new: true }
+    );
+
+    await Transaction.create({
+      userId,
+      type: 'admin_adjust',
+      amount: delta,
+      adminId: adminId || undefined,
+      description: reason || 'Manual admin adjustment',
+      status: 'completed'
+    });
+
+    console.log(`🛠️ ADMIN ADJUST user ${userId} delta £${(delta/100).toFixed(2)}; new balance £${(updatedUser.walletBalance/100).toFixed(2)}`);
+
+    return res.json({
+      status: 'adjusted',
+      balanceAfter: updatedUser.walletBalance
+    });
+  } catch (err) {
+    console.error('admin-adjust error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
