@@ -860,17 +860,23 @@ app.get('/wallet/campaign-withdrawn', requireAdmin, async (req, res) => {
       return sum + amt;
     }, 0);
 
-    // 2) Total withdrawals of available campaign budget back to the brand wallet
-    // These are created by /wallet/withdraw-available-budget and use a description
-    // that includes "withdrawn to wallet".
+    // 2) Total withdrawals of campaign budget back to the brand wallet
+    // Includes both:
+    //   - /wallet/withdraw-available-budget      (description "Campaign available budget withdrawn to wallet", type: 'refund')
+    //   - /wallet/refund-campaign-budget         (description "Campaign cancelled – funds returned", type: 'refund')
+    // We key on stripeId = campaignId and status = 'completed' so all completed
+    // campaign-related refunds are counted, regardless of description.
     const withdrawalTxs = await Transaction.find({
       stripeId: campaignId,
       type: 'refund',
-      description: /withdrawn to wallet/i
+      status: 'completed'
     });
 
     const totalWithdrawnPence = withdrawalTxs.reduce((sum, tx) => {
-      const amt = typeof tx.amount === 'number' ? tx.amount : 0;
+      const raw = typeof tx.amount === 'number' ? tx.amount : 0;
+      // Refund amounts can be stored positive (admin-initiated) or negative (Stripe refund webhook).
+      // Use absolute value so we count the magnitude of completed refunds consistently.
+      const amt = Math.abs(raw);
       return sum + amt;
     }, 0);
 
